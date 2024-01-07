@@ -1,24 +1,30 @@
-from typing import List, Dict
-import math
-import requests
+# 표준 라이브러리
+from datetime import date, datetime
 import json
 import os
-import time
-import aiohttp
-import asyncio
+import sys
 import random
-import boto3
-from datetime import date, datetime
-from dotenv import load_dotenv
+import time
+import math
+import logging
+from typing import List, Dict
 
-load_dotenv()
+# 서드파티 라이브러리
+import asyncio
+import aiohttp
+import boto3
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],  # 표준 출력으로 출력 설정
+)
 
 
 class Scraper:
-    def __init__(self, category_id: int, category_name: str):
-        self.category_id = category_id
-        self.category_name = category_name
-        self.jobs = []
+    def __init__(self):
+        self.job_list = []
         self.user_agent_list = [
             "Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36",
@@ -26,101 +32,108 @@ class Scraper:
         ]
         self.headers = {"User-Agent": random.choice(self.user_agent_list)}
 
-    async def scrape_category(self) -> List[Dict]:
+    async def fetch_all_positions_detail(self) -> List[Dict]:
         """
-        카테고리별 공고를 크롤링
+        id를 통해 모든 공고의 상세 정보를 수집
         """
+        start_time = time.time()
         async with aiohttp.ClientSession() as session:
-            position_ids = await self.get_position_ids(session)
+            position_ids = await self.fetch_all_position_ids(session)
 
             tasks = []
             for i, position_id in enumerate(position_ids):
-                print(f"{self.category_name} - {i}")
-
                 task = asyncio.create_task(
-                    self.get_position_detail(position_id, session)
+                    self.fetch_position_detail(session, position_id)
                 )
                 tasks.append(task)
-            await asyncio.gather(*tasks)
+                if i % 100 == 0 or i == len(position_ids) - 1:  # 100개씩 묶어서 요청
+                    await asyncio.gather(*tasks)
+                    logging.info(
+                        f"scraped {i} data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    tasks = []
+                    await asyncio.sleep(1.5)
 
-        return self.jobs
+        end_time = time.time()
+        logging.info(f"elapsed time: {end_time - start_time}")
+        return
 
-    async def get_category_page_count(self, session) -> int:
+    async def fetch_pages_count(self, session) -> int:
         """
-        카테고리별 공고의 페이지 수를 반환
+        전체 공고의 페이지 수를 반환 (점핏은 한 페이지당 16개의 공고를 반환)
         """
-        url = f"https://api.jumpit.co.kr/api/positions?page=1&jobCategory={self.category_id}"
+        url = "https://api.jumpit.co.kr/api/positions"
         async with session.get(url, headers=self.headers) as response:
             json_data = await response.json()
             total_count = json_data["result"]["totalCount"]
-            print(f"{self.category_name} - total count: {total_count}")
             return math.ceil(total_count / 16)
 
-    async def get_position_ids(self, session) -> List[int]:
+    async def fetch_ids_from_page(self, session, page: int) -> List[int]:
         """
-        카테고리에 속한 공고들의 id 리스트를 반환
+        한 페이지에 있는 공고들의 id 리스트를 반환
         """
-        page_count = await self.get_category_page_count(session)
-        position_ids = []
+        url = f"https://api.jumpit.co.kr/api/positions?page={page}"
+        async with session.get(url, headers=self.headers) as response:
+            try:
+                json_data = await response.json()
+                positions = json_data["result"]["positions"]
+                return [position["id"] for position in positions]
+            except:
+                return []
 
-        for i in range(1, page_count + 1):
-            url = f"https://api.jumpit.co.kr/api/positions?page={i}&jobCategory={self.category_id}"
-            async with session.get(url, headers=self.headers) as response:
-                try:
-                    json_data = await response.json()
-                    positions = json_data["result"]["positions"]
-                    position_ids.extend([position["id"] for position in positions])
-                except:
-                    pass
+    async def fetch_all_position_ids(self, session) -> List[int]:
+        """
+        모든 공고들의 id 리스트를 반환
+        """
+        page_count = await self.fetch_pages_count(session)
+
+        tasks = [
+            self.fetch_ids_from_page(session, page) for page in range(1, page_count + 1)
+        ]
+        pages_position_ids = await asyncio.gather(*tasks)
+
+        # Flatten the list of lists
+        position_ids = []
+        for page_position_ids in pages_position_ids:
+            position_ids.extend(page_position_ids)
 
         return position_ids
 
-    async def get_position_detail(self, position_id: int, session) -> Dict:
+    async def fetch_position_detail(self, session, position_id: int) -> Dict:
         """
         공고 상세 정보를 반환
         """
         url = f"https://api.jumpit.co.kr/api/position/{position_id}"
         async with session.get(url, headers=self.headers) as response:
             if response.status != 200:
-                print(f"Error: {response.status}")
-                return None
-
+                logging.error(f"Error: {response.status} - {url}")
+                return
             response_json = await response.json()
-            result = response_json["result"]
-            position_dict = dict()
 
-            position_dict["job_id"] = position_id
-            position_dict["platform"] = "jumpit"
-            position_dict["category"] = self.category_name
-            position_dict["company"] = result["companyName"]
-            position_dict["title"] = result["title"]
-            position_dict["preferred"] = result["preferredRequirements"]
-            position_dict["required"] = result["qualifications"]
-            position_dict["primary_responsibility"] = result["responsibility"]
-            position_dict["url"] = f"https://www.jumpit.co.kr/position/{position_id}"
-            position_dict["end_at"] = result["closedAt"]
-            position_dict["skills"] = [
-                techStack["stack"] for techStack in result["techStacks"]
+        result = response_json["result"]
+        position_dict = dict()
+
+        position_dict["platform"] = "jumpit"
+        position_dict["job_id"] = position_id
+        position_dict["company"] = result["companyName"]
+        position_dict["title"] = result["title"]
+        position_dict["body"] = "\n\n".join(
+            [
+                result["preferredRequirements"],
+                result["qualifications"],
+                result["responsibility"],
             ]
-            position_dict["location"] = result["jobPostingForSearchEngine"][
-                "jobLocation"
-            ]["address"]["streetAddress"]
-            position_dict["welfare"] = result["welfares"]
-            position_dict["body"] = None
-            position_dict["company_description"] = result["serviceInfo"]
-            position_dict["coordinate"] = None
+        )
+        position_dict["url"] = f"https://www.jumpit.co.kr/position/{position_id}"
 
-        self.jobs.append(position_dict)
+        self.job_list.append(position_dict)
+        return
 
     @staticmethod
     def save_to_json(data_list: list):
-        folder = "data"
-        filename = "async-jumpit.json"
-        """Save the data to JSON file """
-        # JSON 파일로 저장
+        folder = "jumpit_data"
+        filename = "jumpit.json"
         json_data = {"result": data_list}
-
-        # print(f'scraped {len(data_list)} data')
 
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -129,93 +142,41 @@ class Scraper:
             json.dump(json_data, json_file, ensure_ascii=False, indent=4)
             print(f"Data saved to {filename}")
 
-    @staticmethod
-    def upload_to_s3(
-        file_path: str,
-        bucket_name: str,
-        access_key: str,
-        secret_key: str,
-        region_name: str,
-    ) -> None:
-        """Uploads the specified file to an AWS S3 bucket."""
+    # @staticmethod
+    # def upload_to_s3(
+    #     file_path: str,
+    #     bucket_name: str,
+    #     access_key: str,
+    #     secret_key: str,
+    #     region_name: str,
+    # ) -> None:
+    #     """Uploads the specified file to an AWS S3 bucket."""
 
-        print("Start upload!")
+    #     print("Start upload!")
 
-        today = date.today()
-        year = str(today.year)
-        month = str(today.month).zfill(2)
-        day = str(today.day).zfill(2)
-        FILE_NAME = f"jumpit/year={year}/month={month}/day={day}/jumpit.json"
+    #     today = date.today()
+    #     year = str(today.year)
+    #     month = str(today.month).zfill(2)
+    #     day = str(today.day).zfill(2)
+    #     FILE_NAME = f"jumpit/year={year}/month={month}/day={day}/jumpit.json"
 
-        s3 = boto3.client(
-            "s3",
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=region_name,
-        )
+    #     s3 = boto3.client(
+    #         "s3",
+    #         aws_access_key_id=access_key,
+    #         aws_secret_access_key=secret_key,
+    #         region_name=region_name,
+    #     )
 
-        s3.upload_file(file_path, bucket_name, FILE_NAME)
+    #     s3.upload_file(file_path, bucket_name, FILE_NAME)
 
-        path_name = os.path.join(bucket_name, FILE_NAME)
-        print(f"End Upload to s3://{path_name}")
+    #     path_name = os.path.join(bucket_name, FILE_NAME)
+    #     print(f"End Upload to s3://{path_name}")
 
 
 async def main():
-    job_category_dict = {
-        1: "서버/백엔드 개발자",
-        2: "프론트엔드 개발자",
-        3: "웹 풀스택 개발자",
-        4: "안드로이드 개발자",
-        5: "게임 클라이언트 개발자",
-        6: "게임 서버 개발자",
-        7: "빅데이터 엔지니어,DBA",
-        8: "인공지능/머신러닝",
-        9: "devops/시스템 엔지니어",
-        10: "정보보안 담당자",
-        11: "QA 엔지니어",
-        12: "인공지능/머신러닝,개발 PM",
-        13: "HW/임베디드",
-        14: "etc",
-        15: "SW/솔루션",
-        16: "IOS 개발자",
-        17: "웹퍼블리셔",
-        18: "크로스플랫폼 앱개발자",
-        19: "빅데이터 엔지니어",
-        20: "VR/AR/3D,게임 클라이언트 개발자",
-        21: "기술지원",
-        22: "프론트엔드 개발자,블록체인",
-    }
-
-    # 채용 공고를 스크래핑해 json 파일로 저장
-    start_time = time.time()
-
-    tasks = []
-    for category_id, category_name in job_category_dict.items():
-        print(f"start scraping {category_id} - {category_name}")
-        scraper = Scraper(category_id, category_name)
-        task = scraper.scrape_category()
-        tasks.append(task)
-
-    data_list = await asyncio.gather(*tasks)
-    result = []
-    for data in data_list:
-        result.extend(data)
-
-    end_time = time.time()
-    print(f"elapsed time: {end_time - start_time}")
-    print(f"scraped {len(result)} data")
-
-    Scraper.save_to_json(result)
-
-    # json 파일을 s3에 업로드
-    bucket_name = os.environ.get("bucket_name")
-    access_key = os.environ.get("access_key")
-    secret_key = os.environ.get("secret_key")
-    region_name = "ap-northeast-2"
-
-    Scraper.upload_to_s3(
-        "data/async-jumpit.json", bucket_name, access_key, secret_key, region_name
-    )
+    scraper = Scraper()
+    await scraper.fetch_all_positions_detail()
+    Scraper.save_to_json(scraper.job_list)
 
 
 if __name__ == "__main__":
