@@ -21,6 +21,9 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],  # 표준 출력으로 출력 설정
 )
 
+REGION = "ap-northeast-2"
+BUCKET_NAME = "crawled-job-data"
+
 
 class Scraper:
     def __init__(self):
@@ -46,7 +49,9 @@ class Scraper:
                     self.fetch_position_detail(session, position_id)
                 )
                 tasks.append(task)
-                if i % 100 == 0 or i == len(position_ids) - 1:  # 100개씩 묶어서 요청
+                if i != 0 and (
+                    i % 100 == 0 or i == len(position_ids) - 1
+                ):  # 100개씩 묶어서 요청
                     await asyncio.gather(*tasks)
                     logging.info(
                         f"scraped {i} data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -130,55 +135,43 @@ class Scraper:
         return
 
     @staticmethod
-    def save_to_json(data_list: list):
-        folder = "jumpit_data"
+    def save_to_json(data_list: list) -> str:
+        folder = "data"
         filename = "jumpit.json"
+        file_path = os.path.join(folder, filename)
         json_data = {"result": data_list}
 
         if not os.path.exists(folder):
             os.makedirs(folder)
 
-        with open(os.path.join(folder, filename), "w", encoding="utf-8") as json_file:
+        with open(file_path, "w", encoding="utf-8") as json_file:
             json.dump(json_data, json_file, ensure_ascii=False, indent=4)
-            print(f"Data saved to {filename}")
+            print(f"Data saved to {file_path}")
 
-    # @staticmethod
-    # def upload_to_s3(
-    #     file_path: str,
-    #     bucket_name: str,
-    #     access_key: str,
-    #     secret_key: str,
-    #     region_name: str,
-    # ) -> None:
-    #     """Uploads the specified file to an AWS S3 bucket."""
+        return file_path
 
-    #     print("Start upload!")
+    @staticmethod
+    def upload_to_s3(file_path: str):
+        today = date.today()
+        year = str(today.year)
+        month = str(today.month).zfill(2)
+        day = str(today.day).zfill(2)
+        key = f"year={year}/month={month}/day={day}/jumpit.json"
 
-    #     today = date.today()
-    #     year = str(today.year)
-    #     month = str(today.month).zfill(2)
-    #     day = str(today.day).zfill(2)
-    #     FILE_NAME = f"jumpit/year={year}/month={month}/day={day}/jumpit.json"
+        s3 = boto3.client(
+            "s3",
+            region_name=REGION,
+        )
 
-    #     s3 = boto3.client(
-    #         "s3",
-    #         aws_access_key_id=access_key,
-    #         aws_secret_access_key=secret_key,
-    #         region_name=region_name,
-    #     )
-
-    #     s3.upload_file(file_path, bucket_name, FILE_NAME)
-
-    #     path_name = os.path.join(bucket_name, FILE_NAME)
-    #     print(f"End Upload to s3://{path_name}")
+        s3.upload_file(file_path, BUCKET_NAME, key)
 
 
 async def main():
     scraper = Scraper()
     await scraper.fetch_all_positions_detail()
-    Scraper.save_to_json(scraper.job_list)
+    file_path = Scraper.save_to_json(scraper.job_list)
+    Scraper.upload_to_s3(file_path)
 
 
 if __name__ == "__main__":
-    # main()
     asyncio.run(main())
