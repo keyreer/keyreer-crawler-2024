@@ -41,6 +41,7 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: keyreer_jumpit_crawler
           IMAGE_TAG: ${{ github.sha }}
+        working-directory: ./crawler/jumpit
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f crawler/jumpit/Dockerfile crawler/jumpit
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
