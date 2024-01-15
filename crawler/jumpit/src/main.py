@@ -136,7 +136,7 @@ class Scraper:
 
     @staticmethod
     def save_to_json(data_list: list) -> str:
-        folder = "data"
+        folder = "~/data"
         filename = "jumpit.json"
         file_path = os.path.join(folder, filename)
         json_data = {"result": data_list}
