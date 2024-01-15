@@ -1,11 +1,9 @@
-FROM amazon/aws-lambda-python:3.12
+FROM public.ecr.aws/lambda/python:3.11
 
-WORKDIR /app
+COPY requirements.txt ${LAMBDA_TASK_ROOT}
 
-COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-RUN python -m pip install --upgrade pip
+COPY src/* ${LAMBDA_TASK_ROOT}
 
-COPY . .
-
-CMD ["python", "jumpit_crawler.py"]
+CMD [ "main.handler" ]

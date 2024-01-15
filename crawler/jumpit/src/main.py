@@ -173,5 +173,6 @@ async def main():
     Scraper.upload_to_s3(file_path)
 
 
-if __name__ == "__main__":
+def handler(event, context):
     asyncio.run(main())
+    return {"statusCode": 200, "body": json.dumps("crawler finished")}
