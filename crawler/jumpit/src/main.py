@@ -14,6 +14,7 @@ import asyncio
 import aiohttp
 import boto3
 
+os.environ["TZ"] = "Asia/Seoul"
 
 logging.basicConfig(
     level=logging.INFO,
