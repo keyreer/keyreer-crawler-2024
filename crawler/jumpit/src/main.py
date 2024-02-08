@@ -129,7 +129,7 @@ class Scraper:
                 result["qualifications"],
                 result["responsibility"],
             ]
-        )
+        ).lower()
         position_dict["url"] = f"https://www.jumpit.co.kr/position/{position_id}"
 
         self.job_list.append(position_dict)
